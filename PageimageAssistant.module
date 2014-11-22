@@ -1,0 +1,552 @@
+<?php
+
+class PageimageAssistant extends WireData implements Module, ConfigurableModule {
+
+
+    static protected $sharpeningValues = array('none', 'soft', 'medium', 'strong');
+
+
+    static public function isDebugMode() {
+        return (true === wire('config')->debug && wire('user')->isLoggedin() && wire('user')->isSuperuser());
+    }
+
+
+    static public function getDefaultData($which='all') {
+        $imageSizerOptions = array(
+            'imageSizerOptions-upscaling' => true,                            // upscale if necessary to reach target size?
+            'imageSizerOptions-cropping' => true,                             // crop if necessary to reach target size?
+            'imageSizerOptions-autoRotation' => true,                         // automatically correct orientation?
+            'imageSizerOptions-sharpening' => 'soft',                         // sharpening: none | soft | medium | strong
+            'imageSizerOptions-quality' => 90,                                // quality: 1-100 where higher is better but bigger
+            'imageSizerOptions-qualitySlider' => array('min'=>90)
+            );
+        #if (version_compare(wire('config')->version, '2.4.4', '>=')) {
+            $imageSizerOptions['imageSizerOptions-defaultGamma'] = 2.0;       // defaultGamma: 0.5 to 4.0 or -1 to disable gamma correction (default=2.0)
+            $imageSizerOptions['imageSizerOptions-useUSM'] = true;            // useUSM: ImageSizer should use USM-sharpening or only basic sharpening from GD-lib (default=true)
+        #}
+        #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
+            $imageSizerOptions['imageSizerOptions-forceNew'] = false;         // This forces the recreation of every image with every Pagerequest if: a) a user is logged in, b) the user has imageeditor rights, c) $config->debug is set to true!
+        #}
+
+        $imageManipulatorOptions = array(
+            'imageManipulatorOptions-bgcolor' => '255,255,255,0',             // the default canvas color, if needed with any manipulation, provide a comma separated list for R G B and optionally A (alpha)
+            'imageManipulatorOptions-thumbnailColorizeCustom' => '40,-35,0',  // custom colorize color in R G B for ThumbnailsModule, - provide a comma separated list for R G B
+            'imageManipulatorOptions-thumbnailCoordsPermanent' => false,      // should the CroprectangleCoords for ThumbnailsModule be saved permanently
+            );
+
+        if(isset($$which)) return $$which;
+        if('all'!=$which) return array();
+        return array_merge($imageSizerOptions, $imageManipulatorOptions);
+    }
+
+
+    protected function getData() {
+        $data1 = self::getDefaultData();
+        $data2 = wire('modules')->getModuleConfigData(__CLASS__);
+        $this->data = array_merge($data1, $data2);
+    }
+
+
+    public function init() {
+
+        $this->addHook('Pageimage::crop', $this, 'PiaMakeCrop');
+        $this->addHook('Pageimage::cover', $this, 'PiaMakeCover');
+        $this->addHook('Pageimage::contain', $this, 'PiaMakecontain');
+        $this->addHook('Pageimage::pia', $this, 'PiaBallerina');
+
+
+        // synchronize quality-Inputfields (simple integer / slider)
+        if(isset($data['imageSizerOptions-quality'])) {
+            $data = wire('modules')->getModuleConfigData(__CLASS__);
+            $hasSlider = wire('modules')->isInstalled('InputfieldRangeSlider');
+            if($hasSlider && isset($data['imageSizerOptions-qualitySlider']['min']) && $data['imageSizerOptions-qualitySlider']['min'] != $data['imageSizerOptions-quality']) {
+                $data['imageSizerOptions-quality'] = $data['imageSizerOptions-qualitySlider']['min'];
+            } else {
+                $data['imageSizerOptions-qualitySlider']['min'] = $data['imageSizerOptions-quality'];
+            }
+            wire('modules')->saveModuleConfigData(__CLASS__, $data);
+            unset($data);
+        }
+
+        // now get all data and modify / update the $config vars
+        $this->getData();
+
+        # >>> imageSizerOptions
+          $a = $this->config->imageSizerOptions;
+            foreach(array('upscaling', 'cropping', 'autoRotation') as $k) {
+                $a[$k] = (bool)$this->data['imageSizerOptions-' . $k];
+            }
+            $a['sharpening'] = is_int($this->data['imageSizerOptions-sharpening']) ? self::$sharpeningValues[$this->data['imageSizerOptions-sharpening']] : $this->data['imageSizerOptions-sharpening'];
+            $a['quality'] = intval($this->data['imageSizerOptions-quality']);
+            #if (version_compare(wire('config')->version, '2.4.4', '>=')) {
+                $a['defaultGamma'] = (float)$this->data['imageSizerOptions-defaultGamma'];
+                $a['useUSM'] = (bool)$this->data['imageSizerOptions-useUSM'];
+            #}
+            #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
+                if(isset($a['forceNew']) && !self::isDebugMode()) $a['forceNew'] = false; // is only allowed as global setting when in SuperUser-DebugMode !!
+                #if(isset($a['suffix'])) unset($a['suffix']); // this should not be allowed as global setting ??
+            #}
+          $this->config->imageSizerOptions = $a;
+        # <<< imageSizerOptions
+
+        # >>> imageManipulatorOptions
+        if(wire('modules')->isInstalled('PageImageManipulator')) {
+          $a = $this->config->imageManipulatorOptions;
+            $a['bgcolor'] = explode(',', str_replace(' ', '', $this->data['imageManipulatorOptions-bgcolor']));
+            $a['thumbnailColorizeCustom'] = explode(',', str_replace(' ', '', $this->data['imageManipulatorOptions-thumbnailColorizeCustom']));
+            $a['thumbnailCoordsPermanent'] = (bool)$this->data['imageManipulatorOptions-thumbnailCoordsPermanent'];
+          $this->config->imageManipulatorOptions = $a;
+        }
+        # <<< imageManipulatorOptions
+
+    }
+
+
+    public function PiaBallerina($event) {
+        $width = $height = 0;
+        $options = $this->getSizeParams($width, $height, $event->arguments(0), '');
+        $event->return = $event->object->size($width, $height, $options);
+    }
+
+
+    public function PiaMakeCrop($event) {
+        $width = $height = 0;
+        $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacrop');
+        if (!$this->upscaling && ($width > $event->object->width || $height > $event->object->height)) {
+            $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacropfail');
+            $wTarget = $width >= $event->object->width ? $event->object->width : $width;
+            $hTarget = $height >= $event->object->height ? $event->object->height : $height;
+        } else {
+            $wTarget = $width;
+            $hTarget = $height;
+        }
+        if (isset($options['cropping'])) {
+            $options['cropping'] = '' === ImageSizer::croppingValueStr($options['cropping']) ? true : $options['cropping'];
+        } else {
+            $options['cropping'] = true;
+        }
+        $event->return = $event->object->size($wTarget, $hTarget, $options);
+    }
+
+
+    public function PiaMakeContain($event) {
+        $width = $height = 0;
+        $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacontain');
+        if (!$this->upscaling && ($width > $event->object->width && $height > $event->object->height)) {
+            $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacontainfail');
+            $wTarget = $width >= $event->object->width ? $event->object->width : $width;
+            $hTarget = $height >= $event->object->height ? $event->object->height : $height;
+        } else {
+            $wTarget = $width;
+            $hTarget = $height;
+        }
+        $options['cropping'] = false;
+        $event->return = $event->object->size($wTarget, $hTarget, $options);
+    }
+
+
+    public function PiaMakeCover($event) {
+        $width = $height = 0;
+        $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacover');
+        if (!$this->upscaling && ($width > $event->object->width || $height > $event->object->height)) {
+            $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacoverfail');
+            $width = $width >= $event->object->width ? $event->object->width : $width;
+            $height = $height >= $event->object->height ? $event->object->height : $height;
+        }
+        $this->image = array('width'=>$event->object->width, 'height'=>$event->object->height);
+        list($wTarget, $hTarget) = $this->getTargetDimensions($width, $height);
+        $event->return = $event->object->size($wTarget, $hTarget, $options);
+    }
+
+
+    private function getSizeParams(&$width, &$height, $selectorString, $suffix) {
+        $options = self::typeCaster(
+            array(
+                'int' => array('width', 'height', 'size', 'square', 'quality'),
+                'float' => array('defaultGamma'),
+                'bool' => array('upscaling', 'cropping', 'forceNew', 'useUSM', 'useGD', 'autoRotation', 'keepICC', 'keepXMP', 'keepEXIF'),
+                'str' => array('sharpening', 'suffix')
+                ),
+            self::selector2array($this->sanitizer->text($selectorString)));
+        if (isset($options['width'])) {
+            $width = $options['width'];
+            unset($options['width']);
+        } else {
+            $width = 0;
+        }
+        if (isset($options['height'])) {
+            $height = $options['height'];
+            unset($options['height']);
+        } else {
+            $height = 0;
+        }
+        if (isset($options['size'])) {
+            $width = $options['size'];
+            $height = $options['size'];
+            unset($options['size']);
+        }
+        if (isset($options['square'])) {
+            $width = $options['square'];
+            $height = $options['square'];
+            unset($options['square']);
+        }
+        $this->upscaling = isset($options['upscaling']) ? $options['upscaling'] : $this->config->imageSizerOptions['upscaling'];
+        if (!$this->upscaling) { $suffix .= 'noup'; }
+        if (isset($options['suffix'])) {
+            if (is_string($options['suffix'])) {
+                $options['suffix'] = array($suffix, $options['suffix']);
+            } elseif (is_array($options['suffix'])) {
+                array_push($options['suffix'], $suffix);
+            } else {
+                $options['suffix'] = $suffix;
+            }
+        } else {
+            $options['suffix'] = $suffix;
+        }
+        return $options;
+    }
+
+
+    static private function typeCaster($typeDefinitions, $params) {
+        if (!is_array($params)) return null;
+        foreach($typeDefinitions as $type => $param) {
+            foreach($param as $par) $$par = $type;
+        } unset($type, $param, $typeDefinitions);
+        $typecastedParams = array();
+        foreach($params as $k => $v) {
+            $swtch = isset($$k) ? $$k : '';
+            switch($swtch) {
+                case 'float': $typecastedParams[$k] = floatval($v); break;
+                case 'int': $typecastedParams[$k] = intval($v); break;
+                case 'str': $typecastedParams[$k] = strval($v); break;
+                case 'bool': $typecastedParams[$k] = self::validateBool($v); break;
+                default:
+                    if (is_numeric($v)) $typecastedParams[$k] = (float) $v;
+                    elseif (in_array($v, array('on', 'ON', 'true', 'TRUE', true))) $typecastedParams[$k] = true;
+                    elseif (in_array($v, array('off', 'OFF', 'false', 'FALSE', false))) $typecastedParams[$k] = false;
+                    else $typecastedParams[$k] = strval($v);
+            }
+        }
+        return $typecastedParams;
+    }
+
+
+    static private function validateBool($value) {
+        if ($value === true) return true;
+        if ($value === 1) return true;
+        if ($value === -1) return true;
+        if ($value === '1') return true;
+        if ($value === '-1') return true;
+        if ($value === 'on') return true;
+        if ($value === 'ON') return true;
+        if ($value === 'true') return true;
+        if ($value === 'TRUE') return true;
+        return false;
+    }
+
+
+    static private function selector2array($selectorStr) {
+        if (empty($selectorStr)) return;
+        $selectors = new Selectors($selectorStr);
+        $params = array();
+        foreach($selectors as $selector) $params[$selector->field] = $selector->value;
+        return $params;
+    }
+
+
+    private function getTargetDimensions($targetWidth, $targetHeight) {
+        $pWidth = $targetWidth;
+        $pHeight = $targetHeight;
+
+        $img = $this->image;
+
+        if(!$targetHeight) $targetHeight = round(($targetWidth / $img['width']) * $img['height']);
+        if(!$targetWidth) $targetWidth = round(($targetHeight / $img['height']) * $img['width']);
+
+        $originalTargetWidth = $targetWidth;
+        $originalTargetHeight = $targetHeight;
+
+        if($img['width'] < $img['height']) {
+            $pHeight = $this->getProportionalHeight($targetWidth);
+        } else {
+            $pWidth = $this->getProportionalWidth($targetHeight);
+        }
+
+        if($pWidth < $targetWidth) {
+            // if the proportional width is smaller than specified target width
+            $pWidth = $targetWidth;
+            $pHeight = $this->getProportionalHeight($targetWidth);
+        }
+
+        if($pHeight < $targetHeight) {
+            // if the proportional height is smaller than specified target height
+            $pHeight = $targetHeight;
+            $pWidth = $this->getProportionalWidth($targetHeight);
+        }
+
+        return array(
+                0 => (int) $pWidth,
+                1 => (int) $pHeight
+                );
+    }
+
+
+    private function getProportionalWidth($targetHeight) {
+        $img = $this->image;
+        return ceil(($targetHeight / $img['height']) * $img['width']);
+    }
+
+
+    private function getProportionalHeight($targetWidth) {
+        $img = $this->image;
+        return ceil(($targetWidth / $img['width']) * $img['height']);
+    }
+
+
+    static public function getModuleConfigInputfields(array $data) {
+
+//        if(version_compare(wire('config')->version, '2.4.15', '<')) {
+//            $this->error(" requires ProcessWire 2.4.15 or newer. Please update.");
+//        }
+
+        $conf = wire('config');
+        $siteconf = array();
+        if (isset($conf->imageSizerOptions)) {
+            foreach(self::getDefaultData('imageSizerOptions') as $k => $v) {
+                $K = substr($k, 18);
+                if (isset($conf->imageSizerOptions[$K])) $siteconf[$K] = $v;
+            }
+        }
+        if (isset($conf->imageManipulatorOptions)) {
+            foreach(self::getDefaultData('imageManipulatorOptions') as $k => $v) {
+                $K = substr($k, 24);
+                if (isset($conf->imageManipulatorOptions[$K])) $siteconf[$K] = $v;
+            }
+        }
+        $data = array_merge(self::getDefaultData(), $siteconf, $data);
+        unset($K, $k, $v, $siteconf);
+
+        $imageSizerOptions = $imageManipulatorOptions = array();
+        $config = new stdClass();
+        @include($conf->paths->site . 'config.php');
+        $notes = empty($config) ? false : true;
+        if($notes) {
+            if(isset($config->imageSizerOptions)) {
+                foreach($config->imageSizerOptions as $k=>$v) {
+                    $imageSizerOptions[$k] = (is_bool($v) ? (false===$v ? 'false' : 'true') : (is_array($v) ? 'array(' . implode(', ',$v) . ')' : $v));
+                }
+            }
+            if(isset($config->imageManipulatorOptions)) {
+                foreach($config->imageManipulatorOptions as $k=>$v) {
+                    $imageManipulatorOptions[$k] = (is_bool($v) ? (false===$v ? 'false' : 'true') : (is_array($v) ? 'array(' . implode(', ',$v) . ')' : $v));
+                }
+            }
+        }
+        unset($config);
+
+        $modules = wire('modules');
+        $hasPIM = $modules->isInstalled('PageImageManipulator');
+
+
+        ###----------------------------------------------------------------------###
+
+        $form = new InputfieldWrapper();
+
+        # >>> imageSizerOptions
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'imageSizerOptions';
+        $fieldset->attr('name', '_imageSizerOptions');
+        $fieldset->description = __('here you can set sitewide options, - this override the options from site/config.php');
+        $fieldset->collapsed = Inputfield::collapsedYes;
+
+            $field = $modules->get('InputfieldCheckbox');
+            $field->label = 'upscaling';
+            $field->attr('name', 'imageSizerOptions-upscaling');
+            $field->attr('value', 1);
+            $field->attr('checked', $data['imageSizerOptions-upscaling'] ? 'checked' : '');
+            $field->description = __('upscale if necessary to reach target size?');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['upscaling']) ? $imageSizerOptions['upscaling'] : '{-not-set-}');
+            $field->columnWidth = 33;
+            $fieldset->add($field);
+
+            $field = $modules->get('InputfieldCheckbox');
+            $field->label = 'cropping';
+            $field->attr('name', 'imageSizerOptions-cropping');
+            $field->attr('value', 1);
+            $field->attr('checked', $data['imageSizerOptions-cropping'] ? 'checked' : '');
+            $field->description = __('crop if necessary to reach target size?');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['cropping']) ? $imageSizerOptions['cropping'] : '{-not-set-}');
+            $field->columnWidth = 34;
+            $fieldset->add($field);
+
+            $field = $modules->get('InputfieldCheckbox');
+            $field->label = 'autoRotation';
+            $field->attr('name', 'imageSizerOptions-autoRotation');
+            $field->attr('value', 1);
+            $field->attr('checked', $data['imageSizerOptions-autoRotation'] ? 'checked' : '');
+            $field->description = __('automatically correct orientation?');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['autoRotation']) ? $imageSizerOptions['autoRotation'] : '{-not-set-}');
+            $field->columnWidth = 33;
+            $fieldset->add($field);
+
+            $field = $modules->get('InputfieldSelect');
+            $field->label = 'sharpening';
+            $field->attr('name', 'imageSizerOptions-sharpening');
+            if(is_string($data['imageSizerOptions-sharpening']) && in_array($data['imageSizerOptions-sharpening'], self::$sharpeningValues)) {
+                $flippedA = array_flip(self::$sharpeningValues);
+                $value = $flippedA[$data['imageSizerOptions-sharpening']];
+            } elseif(is_int($data['imageSizerOptions-sharpening'])) {
+                $value = $data['imageSizerOptions-sharpening'];
+            } else {
+                $value = '1';
+            }
+            $field->attr('value', intval($value));
+            $field->addOptions(self::$sharpeningValues);
+            $field->description = __('sharpening: none | soft | medium | strong');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['sharpening']) ? $imageSizerOptions['sharpening'] : '{-not-set-}');
+            $field->columnWidth = 50;
+            $fieldset->add($field);
+
+            if($modules->isInstalled('InputfieldRangeSlider') && version_compare(InputfieldRangeSlider::getModuleInfo()['version'], '1.0.4', '>=')) {
+                $field = $modules->get('InputfieldRangeSlider');
+                // read value from imageSizerOptions-quality, not from imageSizerOptions-qualitySlider
+                $field->label = 'quality';
+                $field->attr('name', 'imageSizerOptions-qualitySlider');
+                $field->attr('value', array('min'=>($data['imageSizerOptions-quality']>0 && $data['imageSizerOptions-quality']<=100 ? $data['imageSizerOptions-quality'] : 90)));
+                $field->isrange = false;
+                $field->minValue = 1;
+                $field->maxValue = 100;
+                $field->step = 1;
+                $field->width = 100;
+                $field->description = __('quality: 1-100 where higher is better but bigger');
+                if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['quality']) ? $imageSizerOptions['quality'] : '{-not-set-}');
+                $field->columnWidth = 50;
+                $fieldset->add($field);
+            } else {
+                $field = $modules->get('InputfieldInteger');
+                $field->label = 'quality';
+                $field->attr('name', 'imageSizerOptions-quality');
+                $field->attr('value', ($data['imageSizerOptions-quality']>0 && $data['imageSizerOptions-quality']<=100 ? $data['imageSizerOptions-quality'] : 90));
+                $field->description = __('quality: 1-100 where higher is better but bigger');
+                if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['quality']) ? $imageSizerOptions['quality'] : '{-not-set-}');
+                $field->columnWidth = 50;
+                $fieldset->add($field);
+            }
+
+            #if (version_compare(wire('config')->version, '2.4.4', '>=')) {
+                $fieldset2 = $modules->get('InputfieldFieldset');
+                $fieldset2->label = 'Advanced';
+                $fieldset2->attr('name', '_imageSizerOptionsAdvanced');
+                $fieldset2->description = __('here you can set sitewide options, - this override the options from site/config.php');
+                $fieldset2->collapsed = Inputfield::collapsedYes;
+
+                    $field = $modules->get('InputfieldCheckbox');
+                    $field->label = 'useUSM';
+                    $field->attr('name', 'imageSizerOptions-useUSM');
+                    $field->attr('value', 1);
+                    $field->attr('checked', $data['imageSizerOptions-useUSM'] ? 'checked' : '');
+                    $field->description = __('Use UnSharpMask-Sharpening with the core ImageSizer. Uncheck to use only basic sharpening with GD-lib. (default=checked)');
+                    if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['useUSM']) ? $imageSizerOptions['useUSM'] : '{-not-set-}');
+                    $field->columnWidth = 50;
+                    $fieldset2->add($field);
+
+                    $field = $modules->get('InputfieldFloat');
+                    $field->label = 'defaultGamma';
+                    $field->attr('name', 'imageSizerOptions-defaultGamma');
+                    $field->attr('value', $data['imageSizerOptions-defaultGamma']);
+                    $field->description = __('defaultGamma: 0.5 to 4.0, (default=2.0). To disable gamma correction you can set this to -1 here!');
+                    if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageSizerOptions['defaultGamma']) ? $imageSizerOptions['defaultGamma'] : '{-not-set-}');
+                    $field->columnWidth = 50;
+                    $fieldset2->add($field);
+
+                $fieldset->add($fieldset2);
+            #}
+
+        $form->add($fieldset);
+        # <<< imageSizerOptions
+
+
+        # >>> imageManipulatorOptions
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'imageManipulatorOptions';
+        $fieldset->attr('name', '_imageManipulatorOptions');
+        $fieldset->description = __('here you can set sitewide options, - this override the options from site/config.php');
+        $fieldset->collapsed = $hasPIM ? Inputfield::collapsedYes : Inputfield::collapsedHidden;
+
+            $field = $modules->get('InputfieldCheckbox');
+            $field->label = 'thumbnailCoordsPermanent';
+            $field->attr('name', 'imageManipulatorOptions-thumbnailCoordsPermanent');
+            $field->attr('value', $hasPIM ? 1 : 0);
+            $field->attr('checked', $data['imageManipulatorOptions-thumbnailCoordsPermanent'] ? 'checked' : '');
+            $field->description = __('should the CroprectangleCoords for ThumbnailsModule be saved permanently?');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageManipulatorOptions['thumbnailCoordsPermanent']) ? $imageManipulatorOptions['thumbnailCoordsPermanent'] : '{-not-set-}');
+            $field->columnWidth = 33;
+            $fieldset->add($field);
+
+            $field = $modules->get('InputfieldText');
+            $field->label = 'bgcolor';
+            $field->attr('name', 'imageManipulatorOptions-bgcolor');
+            $field->attr('value', $data['imageManipulatorOptions-bgcolor']);
+            $field->description = __('the default canvas color, if needed with any manipulation, - provide a comma separated list for R G B and optionally A (alpha)');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageManipulatorOptions['bgcolor']) ? $imageManipulatorOptions['bgcolor'] : '{-not-set-}');
+            $field->columnWidth = 34;
+            $fieldset->add($field);
+
+            $field = $modules->get('InputfieldText');
+            $field->label = 'thumbnailColorizeCustom';
+            $field->attr('name', 'imageManipulatorOptions-thumbnailColorizeCustom');
+            $field->attr('value', $data['imageManipulatorOptions-thumbnailColorizeCustom']);
+            $field->description = __('custom colorize color in R G B for ThumbnailsModule, - provide a comma separated list for R G B');
+            if($notes) $field->notes = sprintf(__('value in site/config.php: %s'), isset($imageManipulatorOptions['thumbnailColorizeCustom']) ? $imageManipulatorOptions['thumbnailColorizeCustom'] : '{-not-set-}');
+            $field->columnWidth = 33;
+            $fieldset->add($field);
+
+        $form->add($fieldset);
+        # <<< imageManipulatorOptions
+
+
+        # >>> developerOptions
+        #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
+            $fieldset = $modules->get('InputfieldFieldset');
+            $fieldset->label = 'during site development';
+            $fieldset->attr('name', '_duringSiteDevelopment');
+            $fieldset->description = __("Settings that may help during site development, BUT be careful! Don't forget your settings here!");
+            $fieldset->collapsed = Inputfield::collapsedYes;
+
+                $field = $modules->get("InputfieldMarkup");
+                $field->attr('name', 'infoDeveloperOptions');
+                $field->collapsed = Inputfield::collapsedNo;
+                $field->attr('value',
+                    "ATTENTION: <br /><br />
+                    This may force the recreation of _every_ image with _every_ Pagerequest in Frontend AND Backend!<br /><br />
+                    Conditions for this to take effect are: <ul>
+                    <li>a) user is logged in</li>
+                    <li>b) user is SuperUser</li>
+                    <li>c) \$config-debug is set to TRUE</li>
+                    <li>d) this is checked here!</li></ul>
+                    "
+                    );
+                $field->label = '';
+                $field->columnWidth = 100;
+                $fieldset->add($field);
+
+                $field = $modules->get('InputfieldCheckbox');
+                $field->label = 'forceNew';
+                $field->attr('name', 'imageSizerOptions-forceNew');
+                $field->attr('value', 1);
+                $field->attr('checked', $data['imageSizerOptions-forceNew'] ? 'checked' : '');
+                $field->notes = sprintf( __('Actually the conditions a) - c) result in: %s'), (self::isDebugMode() ? 'TRUE' : 'FALSE'));
+                $field->columnWidth = 100;
+                $fieldset->add($field);
+
+            $form->add($fieldset);
+        #}
+        # <<< developerOptions
+
+
+        unset($notes);
+
+        return $form;
+    }
+
+}
