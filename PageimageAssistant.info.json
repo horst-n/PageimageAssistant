@@ -1,12 +1,11 @@
 {
     "title": "Pia - Pageimage Assistant",
     "summary": "Provide alternative methods for Pageimages (crop, contain, cover, pia) to assist with $options array. Also provide GUI screen for easy and quick changes of sitewide Pageimage default-settings.",
-    "version": 1,
+    "version": 2,
     "author": "Horst Nogajski",
-    "href": "https://processwire.com/talk/",
+    "href": "https://processwire.com/talk/topic/8367-pia-pageimage-assistant/",
     "icon": "image",
     "requires": "ProcessWire>=2.4.15, PHP>=5.3.8",
-    "installs": "InputfieldCroppableImage, ProcessCroppableImage",
     "singular": true,
     "autoload": true
 }
