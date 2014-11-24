@@ -72,7 +72,8 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $this->getData();
 
         # >>> imageSizerOptions
-          $a = $this->config->imageSizerOptions;
+          // at first we get settings from config.php just to support actually unknown params
+          $a = isset($this->config->imageSizerOptions) ? $this->config->imageSizerOptions : array();
             foreach(array('upscaling', 'cropping', 'autoRotation') as $k) {
                 $a[$k] = (bool)$this->data['imageSizerOptions-' . $k];
             }
@@ -83,8 +84,9 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 $a['useUSM'] = (bool)$this->data['imageSizerOptions-useUSM'];
             #}
             #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
-                if(isset($a['forceNew']) && !self::isDebugMode()) $a['forceNew'] = false; // is only allowed as global setting when in SuperUser-DebugMode !!
-                #if(isset($a['suffix'])) unset($a['suffix']); // this should not be allowed as global setting ??
+                $a['forceNew'] = isset($this->data['imageSizerOptions-forceNew']) && (bool)$this->data['imageSizerOptions-forceNew'] ? true : false;
+                $a['forceNew'] = ($a['forceNew'] && !self::isDebugMode()) ? false : $a['forceNew']; // is only allowed as global setting when in SuperUser-DebugMode !!
+                if(isset($a['suffix'])) unset($a['suffix']); // this should not be allowed as global setting
             #}
           $this->config->imageSizerOptions = $a;
         # <<< imageSizerOptions
