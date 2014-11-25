@@ -342,8 +342,8 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
         $modules = wire('modules');
         $hasPIM = $modules->isInstalled('PageImageManipulator');
-        $hasSlider = $modules->isInstalled('InputfieldRangeSlider') && version_compare(InputfieldRangeSlider::getModuleInfo()['version'], '1.0.4', '>=');
-
+        if($modules->isInstalled('InputfieldRangeSlider')) $rangeSliderInfo = InputfieldRangeSlider::getModuleInfo();
+        $hasSlider = $modules->isInstalled('InputfieldRangeSlider') && version_compare($rangeSliderInfo['version'], '1.0.4', '>=');
 
         ###----------------------------------------------------------------------###
 
@@ -353,7 +353,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'imageSizerOptions';
         $fieldset->attr('name', '_imageSizerOptions');
-        $fieldset->description = __('here you can set sitewide options, - this override the options from site/config.php');
+        $fieldset->description = __('Here you can set sitewide options. This overrides the options from site/config.php');
         $fieldset->collapsed = Inputfield::collapsedNo;
 
             $field = $modules->get('InputfieldCheckbox');
@@ -436,7 +436,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 $fieldset2 = $modules->get('InputfieldFieldset');
                 $fieldset2->label = 'Advanced';
                 $fieldset2->attr('name', '_imageSizerOptionsAdvanced');
-                $fieldset2->description = __('here you can set sitewide options, - this override the options from site/config.php');
+                $fieldset2->description = __('Here you can set sitewide options. This overrides the options from site/config.php');
                 $fieldset2->collapsed = Inputfield::collapsedYes;
 
                     $field = $modules->get('InputfieldCheckbox');
