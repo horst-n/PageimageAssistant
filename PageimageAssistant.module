@@ -1,4 +1,22 @@
 <?php
+/**
+*  ProcessWire 2.5.x
+*  Copyright (C) 2010 by Ryan Cramer
+*  Licensed under GNU/GPL v2, see LICENSE.TXT
+*
+*  http://www.processwire.com
+*  http://www.ryancramer.com
+*
+*
+*  Module PageimageAssistant - Pia
+*
+*  This module assists in usage with Pageimages
+*
+*  Author: Horst Nogajski, http://nogajski.de
+*
+*  https://processwire.com/talk/topic/8367-pia-pageimage-assistant/
+*
+*/
 
 class PageimageAssistant extends WireData implements Module, ConfigurableModule {
 
