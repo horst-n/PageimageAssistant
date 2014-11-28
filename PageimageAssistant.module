@@ -188,26 +188,28 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
 
 
-    private function getSizeParams(&$width, &$height, $selectorString, $suffix, &$weighten=false) {
+    private function getSizeParams(&$width, &$height, $selectorString, $suffix, &$weighten='') {
+        $validWeightenValues = array('on'=>'on', 'ON'=>'ON', '1'=>'1', '-1'=>'-1', 'true'=>'-1', 'TRUE'=>'-1', 'x1'=>'-1', 'x2'=>'-1', 'y1'=>'-1', 'y2'=>'-1');
+        $validWeightenPrios = array('x1'=>'-1', 'x2'=>'-1', 'y1'=>'-1', 'y2'=>'-1');
         $options = self::typeCaster(
             array(
                 'int' => array('width', 'height', 'size', 'square', 'quality'),
                 'float' => array('defaultGamma'),
-                'bool' => array('upscaling', 'cropping', 'forceNew', 'useUSM', 'useGD', 'autoRotation', 'keepICC', 'keepXMP', 'keepEXIF', 'weighten'),
-                'str' => array('sharpening', 'suffix', 'weightenprio')
+                'bool' => array('upscaling', 'cropping', 'forceNew', 'useUSM', 'useGD', 'autoRotation', 'keepICC', 'keepXMP', 'keepEXIF'),
+                'str' => array('sharpening', 'suffix', 'weighten')
                 ),
             self::selector2array($this->sanitizer->text($selectorString)));
         $this->weightenPrio = null;
-        if (isset($options['weighten']) && true === $options['weighten']) {
+        if (isset($options['weighten']) && isset($validWeightenValues[$options['weighten']])) {
             $weighten = true;
-            unset($options['weighten']);
-            if (isset($options['weightenprio']) && in_array(strtolower(substr($options['weightenprio'], 0, 1)), array('x', 'y'))) {
+            if (isset($validWeightenPrios[$options['weighten']])) {
                 $this->weightenPrio = array(
-                    strtolower(substr($options['weightenprio'], 0, 1)),
-                    (2 == intval(substr($options['weightenprio'], 1, 1)) ? 2 : 1)
+                    strtolower(substr($options['weighten'], 0, 1)),
+                    (2 == intval(substr($options['weighten'], 1, 1)) ? 2 : 1)
                 );
                 $suffix .= strval($this->weightenPrio[0] . $this->weightenPrio[1]);
             }
+            unset($options['weighten']);
         }
         if (isset($options['width'])) {
             $width = $options['width'];
@@ -256,12 +258,11 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 if ('x' == $this->weightenPrio[0]) {
                     $width  = ceil($width  / 100 * (2==$this->weightenPrio[1] ? 124 : 112));
                     $height = ceil($height / 100 * (2==$this->weightenPrio[1] ? 76 : 88));
-                    $suffix = 'piacontweighland';
                 } elseif ('y' == $this->weightenPrio[0]) {
                     $width  = ceil($width  / 100 * (2==$this->weightenPrio[1] ? 76 : 88));
                     $height = ceil($height / 100 * (2==$this->weightenPrio[1] ? 124 : 112));
-                    $suffix = 'piacontweighport';
                 }
+                $suffix .= strval($this->weightenPrio[0] ) . strval($this->weightenPrio[1]);
             }
         }
         $box_x = $width;
