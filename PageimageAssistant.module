@@ -67,10 +67,10 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
     public function init() {
 
+        $this->addHook('Pageimage::pia', $this, 'PiaBallerina');
         $this->addHook('Pageimage::crop', $this, 'PiaMakeCrop');
         $this->addHook('Pageimage::cover', $this, 'PiaMakeCover');
-        $this->addHook('Pageimage::contain', $this, 'PiaMakecontain');
-        $this->addHook('Pageimage::pia', $this, 'PiaBallerina');
+        $this->addHook('Pageimage::contain', $this, 'PiaMakeContain');
 
 
         // synchronize quality-Inputfields (simple integer / slider)
@@ -149,22 +149,6 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
     }
 
 
-    public function PiaMakeContain($event) {
-        $width = $height = 0;
-        $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacontain');
-        if (!$this->upscaling && ($width > $event->object->width && $height > $event->object->height)) {
-            $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacontainfail');
-            $wTarget = $width >= $event->object->width ? $event->object->width : $width;
-            $hTarget = $height >= $event->object->height ? $event->object->height : $height;
-        } else {
-            $wTarget = $width;
-            $hTarget = $height;
-        }
-        $options['cropping'] = false;
-        $event->return = $event->object->size($wTarget, $hTarget, $options);
-    }
-
-
     public function PiaMakeCover($event) {
         $width = $height = 0;
         $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacover');
@@ -179,15 +163,52 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
     }
 
 
-    private function getSizeParams(&$width, &$height, $selectorString, $suffix) {
+    public function PiaMakeContain($event) {
+        $width = $height = 0;
+        $weighten = false;
+        $suffix = 'piacontain';
+        $options = $this->getSizeParams($width, $height, $event->arguments(0), $suffix, $weighten);
+        if (isset($weighten) && true === $weighten) {
+            $suffix = 'piacontweigh';
+            $options = $this->weighten($event->object, $width, $height, $event->arguments(0), $suffix);
+        }
+        if (!$this->upscaling && ($width > $event->object->width && $height > $event->object->height)) {
+            $options = $this->getSizeParams($width, $height, $event->arguments(0), $suffix . 'fail', $weighten);
+            $wTarget = $width >= $event->object->width ? $event->object->width : $width;
+            $hTarget = $height >= $event->object->height ? $event->object->height : $height;
+        } else {
+            $wTarget = $width;
+            $hTarget = $height;
+        }
+        $options['cropping'] = false;
+        $event->return = $event->object->size($wTarget, $hTarget, $options);
+    }
+
+
+
+
+
+    private function getSizeParams(&$width, &$height, $selectorString, $suffix, &$weighten=false) {
         $options = self::typeCaster(
             array(
                 'int' => array('width', 'height', 'size', 'square', 'quality'),
                 'float' => array('defaultGamma'),
-                'bool' => array('upscaling', 'cropping', 'forceNew', 'useUSM', 'useGD', 'autoRotation', 'keepICC', 'keepXMP', 'keepEXIF'),
-                'str' => array('sharpening', 'suffix')
+                'bool' => array('upscaling', 'cropping', 'forceNew', 'useUSM', 'useGD', 'autoRotation', 'keepICC', 'keepXMP', 'keepEXIF', 'weighten'),
+                'str' => array('sharpening', 'suffix', 'weightenprio')
                 ),
             self::selector2array($this->sanitizer->text($selectorString)));
+        $this->weightenPrio = null;
+        if (isset($options['weighten']) && true === $options['weighten']) {
+            $weighten = true;
+            unset($options['weighten']);
+            if (isset($options['weightenprio']) && in_array(strtolower(substr($options['weightenprio'], 0, 1)), array('x', 'y'))) {
+                $this->weightenPrio = array(
+                    strtolower(substr($options['weightenprio'], 0, 1)),
+                    (2 == intval(substr($options['weightenprio'], 1, 1)) ? 2 : 1)
+                );
+                $suffix .= strval($this->weightenPrio[0] . $this->weightenPrio[1]);
+            }
+        }
         if (isset($options['width'])) {
             $width = $options['width'];
             unset($options['width']);
@@ -223,6 +244,67 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         } else {
             $options['suffix'] = $suffix;
         }
+        return $options;
+    }
+
+
+    private function weighten(&$image, &$width, &$height, $selectorString, $suffix) {
+        $box_x = $box_y = $weighten = 0;
+        $options = $this->getSizeParams($width, $height, $selectorString, $suffix, $weighten);
+        if (is_array($this->weightenPrio)) {
+            if ($width == $height) {
+                if ('x' == $this->weightenPrio[0]) {
+                    $width  = ceil($width  / 100 * (2==$this->weightenPrio[1] ? 124 : 112));
+                    $height = ceil($height / 100 * (2==$this->weightenPrio[1] ? 76 : 88));
+                    $suffix = 'piacontweighland';
+                } elseif ('y' == $this->weightenPrio[0]) {
+                    $width  = ceil($width  / 100 * (2==$this->weightenPrio[1] ? 76 : 88));
+                    $height = ceil($height / 100 * (2==$this->weightenPrio[1] ? 124 : 112));
+                    $suffix = 'piacontweighport';
+                }
+            }
+        }
+        $box_x = $width;
+        $box_y = $height;
+        $proc = 38;
+
+        // calculate ratio between image & wanted size
+        $rX = $box_x / $image->width;
+        $rY = $box_y / $image->height;
+
+        // the least expensive, is taken for size caculation
+        $width = $widthUC = min($rX, $rY) * $image->width;
+        $height = $heightUC = min($rX, $rY) * $image->height;
+
+        // $shrinkIt
+        $i = 0;
+        $array = array();
+        $range = range(0, 100);    // create array
+        $fraction = $proc / 100;
+        // key of array, will be used by percentage value
+        foreach ($range as $key) {
+            $array[$key] = $i;
+            $i = $i + $fraction;
+        }
+        // procent compare to box
+        $proc = (int) ( $width * $height ) * 100 / ( $box_x * $box_y );
+        $width = round($width - ($array[$proc] * $width / 100));
+        $height = round($height - ($array[$proc] * $height / 100));
+
+        // now calculate and apply a bias
+        $ratio = floatval(($image->width >= $image->height ? $image->width / $image->height : $image->height / $image->width));
+        if ($ratio < 1.75) {
+            $bias = 1.2;
+        } elseif ($ratio < 2.1) {
+            $bias = 1.17;
+        } elseif ($ratio < 2.5) {
+            $bias = 1.07;
+        } else {
+            $bias = 1;
+        }
+        $width = intval($bias * $width);
+        $height = intval($bias * $height);
+
         return $options;
     }
 
@@ -528,7 +610,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             $fieldset->label = 'during site development';
             $fieldset->attr('name', '_duringSiteDevelopment');
             $fieldset->description = __("Settings that may help during site development, BUT be careful! Don't forget your settings here!");
-            $fieldset->collapsed = Inputfield::collapsedYes;
+            $fieldset->collapsed = $data['imageSizerOptions-forceNew'] ? Inputfield::collapsedNo :  Inputfield::collapsedYes;
 
                 $field = $modules->get("InputfieldMarkup");
                 $field->attr('name', 'infoDeveloperOptions');
