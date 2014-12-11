@@ -98,7 +98,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             $a['sharpening'] = is_numeric($this->data['imageSizerOptions-sharpening']) ? self::$sharpeningValues[(int)$this->data['imageSizerOptions-sharpening']] : $this->data['imageSizerOptions-sharpening'];
             $a['quality'] = intval($this->data['imageSizerOptions-quality']);
             #if (version_compare(wire('config')->version, '2.4.4', '>=')) {
-                $a['defaultGamma'] = (float)$this->data['imageSizerOptions-defaultGamma'];
+                $a['defaultGamma'] = -1==$this->data['imageSizerOptions-defaultGamma'] ? (int)$this->data['imageSizerOptions-defaultGamma'] : (float)$this->data['imageSizerOptions-defaultGamma'];
                 $a['useUSM'] = (bool)$this->data['imageSizerOptions-useUSM'];
             #}
             #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
@@ -199,15 +199,23 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 'str' => array('sharpening', 'suffix', 'weighten')
                 ),
             self::selector2array($this->sanitizer->text($selectorString)));
+        if (isset($options['defaultGamma']) && -1== $options['defaultGamma']) $options['defaultGamma'] = intval(-1);
         $this->weightenPrio = null;
-        if (isset($options['weighten']) && isset($validWeightenValues[$options['weighten']])) {
-            $weighten = true;
-            if (isset($validWeightenPrios[$options['weighten']])) {
-                $this->weightenPrio = array(
-                    strtolower(substr($options['weighten'], 0, 1)),
-                    (2 == intval(substr($options['weighten'], 1, 1)) ? 2 : 1)
-                );
-                $suffix .= strval($this->weightenPrio[0] . $this->weightenPrio[1]);
+        $this->weightenCompression = null;
+        $weighten = true;
+        if (isset($options['weighten'])) {
+            if (isset($validWeightenValues[$options['weighten']])) {
+                if (isset($validWeightenPrios[$options['weighten']])) {
+                    $this->weightenPrio = array(
+                        strtolower(substr($options['weighten'], 0, 1)),
+                        (2 == intval(substr($options['weighten'], 1, 1)) ? 2 : 1)
+                        );
+                        $suffix .= strval($this->weightenPrio[0] . $this->weightenPrio[1]);
+                }
+            }
+            if (substr($options['weighten'], 0, 4) == 'comp' && is_numeric(substr($options['weighten'], 4))) {
+                $this->weightenCompression = intval(substr($options['weighten'], 4));
+                $this->weightenCompression = 0 < $this->weightenCompression && 100 > $this->weightenCompression ? $this->weightenCompression : null;
             }
             unset($options['weighten']);
         }
@@ -267,7 +275,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         }
         $box_x = $width;
         $box_y = $height;
-        $proc = 38;
+        $proc = isset($this->weightenCompression) && 0 < $this->weightenCompression && 100 > $this->weightenCompression ? $this->weightenCompression : 38;
 
         // calculate ratio between image & wanted size
         $rX = $box_x / $image->width;
@@ -292,7 +300,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $width = round($width - ($array[$proc] * $width / 100));
         $height = round($height - ($array[$proc] * $height / 100));
 
-        // now calculate and apply a bias
+        // now calculate a bias
         $ratio = floatval(($image->width >= $image->height ? $image->width / $image->height : $image->height / $image->width));
         if ($ratio < 1.75) {
             $bias = 1.2;
@@ -303,8 +311,11 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         } else {
             $bias = 1;
         }
-        $width = intval($bias * $width);
-        $height = intval($bias * $height);
+        if (!isset($this->weightenCompression) || null == $this->weightenCompression) {
+            // apply the bias
+            $width = intval($bias * $width);
+            $height = intval($bias * $height);
+        }
 
         return $options;
     }
@@ -316,13 +327,14 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             foreach($param as $par) $$par = $type;
         } unset($type, $param, $typeDefinitions);
         $typecastedParams = array();
+        $validBooleans = array(-1=>-1, 1=>1, '1'=>'1', '-1'=>'-1', 'on'=>'on', 'ON'=>'ON', 'true'=>'true', 'TRUE'=>'TRUE');
         foreach($params as $k => $v) {
             $swtch = isset($$k) ? $$k : '';
             switch($swtch) {
                 case 'float': $typecastedParams[$k] = floatval($v); break;
                 case 'int': $typecastedParams[$k] = intval($v); break;
                 case 'str': $typecastedParams[$k] = strval($v); break;
-                case 'bool': $typecastedParams[$k] = self::validateBool($v); break;
+                case 'bool': $typecastedParams[$k] = (bool) isset($validBooleans[$v]); break;
                 default:
                     if (is_numeric($v)) $typecastedParams[$k] = (float) $v;
                     elseif (in_array($v, array('on', 'ON', 'true', 'TRUE', true))) $typecastedParams[$k] = true;
@@ -331,14 +343,6 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             }
         }
         return $typecastedParams;
-    }
-
-
-    static private function validateBool($value) {
-        foreach(array(true, 1, -1, '1', '-1', 'on', 'ON', 'true', 'TRUE') as $check) {
-            if ($check === $value) return true;
-        }
-        return false;
     }
 
 
@@ -449,6 +453,46 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         ###----------------------------------------------------------------------###
 
         $form = new InputfieldWrapper();
+
+
+        # >>> developerOptions
+        #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
+            $fieldset = $modules->get('InputfieldFieldset');
+            $fieldset->label = 'during site development';
+            $fieldset->attr('name', '_duringSiteDevelopment');
+            $fieldset->description = __("Settings that may help during site development, BUT be careful! Don't forget your settings here!");
+            $fieldset->collapsed = $data['imageSizerOptions-forceNew'] ? Inputfield::collapsedNo :  Inputfield::collapsedYes;
+
+                $field = $modules->get("InputfieldMarkup");
+                $field->attr('name', 'infoDeveloperOptions');
+                $field->collapsed = Inputfield::collapsedNo;
+                $field->attr('value',
+                    "ATTENTION: <br /><br />
+                    This may force the recreation of _every_ image with _every_ Pagerequest in Frontend AND Backend!<br /><br />
+                    Conditions for this to take effect are: <ul>
+                    <li>a) user is logged in</li>
+                    <li>b) user is SuperUser</li>
+                    <li>c) \$config-debug is set to TRUE</li>
+                    <li>d) this is checked here!</li></ul>
+                    "
+                    );
+                $field->label = '';
+                $field->columnWidth = 100;
+                $fieldset->add($field);
+
+                $field = $modules->get('InputfieldCheckbox');
+                $field->label = 'forceNew';
+                $field->attr('name', 'imageSizerOptions-forceNew');
+                $field->attr('value', 1);
+                $field->attr('checked', $data['imageSizerOptions-forceNew'] ? 'checked' : '');
+                $field->notes = sprintf( __('Actually the conditions a) - c) result in: %s'), (self::isDebugMode() ? 'TRUE' : 'FALSE'));
+                $field->columnWidth = 100;
+                $fieldset->add($field);
+
+            $form->add($fieldset);
+        #}
+        # <<< developerOptions
+
 
         # >>> imageSizerOptions
         $fieldset = $modules->get('InputfieldFieldset');
@@ -603,45 +647,6 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
         $form->add($fieldset);
         # <<< imageManipulatorOptions
-
-
-        # >>> developerOptions
-        #if (version_compare(wire('config')->version, '2.4.15', '>=')) {
-            $fieldset = $modules->get('InputfieldFieldset');
-            $fieldset->label = 'during site development';
-            $fieldset->attr('name', '_duringSiteDevelopment');
-            $fieldset->description = __("Settings that may help during site development, BUT be careful! Don't forget your settings here!");
-            $fieldset->collapsed = $data['imageSizerOptions-forceNew'] ? Inputfield::collapsedNo :  Inputfield::collapsedYes;
-
-                $field = $modules->get("InputfieldMarkup");
-                $field->attr('name', 'infoDeveloperOptions');
-                $field->collapsed = Inputfield::collapsedNo;
-                $field->attr('value',
-                    "ATTENTION: <br /><br />
-                    This may force the recreation of _every_ image with _every_ Pagerequest in Frontend AND Backend!<br /><br />
-                    Conditions for this to take effect are: <ul>
-                    <li>a) user is logged in</li>
-                    <li>b) user is SuperUser</li>
-                    <li>c) \$config-debug is set to TRUE</li>
-                    <li>d) this is checked here!</li></ul>
-                    "
-                    );
-                $field->label = '';
-                $field->columnWidth = 100;
-                $fieldset->add($field);
-
-                $field = $modules->get('InputfieldCheckbox');
-                $field->label = 'forceNew';
-                $field->attr('name', 'imageSizerOptions-forceNew');
-                $field->attr('value', 1);
-                $field->attr('checked', $data['imageSizerOptions-forceNew'] ? 'checked' : '');
-                $field->notes = sprintf( __('Actually the conditions a) - c) result in: %s'), (self::isDebugMode() ? 'TRUE' : 'FALSE'));
-                $field->columnWidth = 100;
-                $fieldset->add($field);
-
-            $form->add($fieldset);
-        #}
-        # <<< developerOptions
 
 
         unset($notes);
