@@ -199,7 +199,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 'str' => array('sharpening', 'suffix', 'weighten')
                 ),
             self::selector2array($this->sanitizer->text($selectorString)));
-        if (isset($options['defaultGamma']) && -1== $options['defaultGamma']) $options['defaultGamma'] = intval(-1);
+        if (isset($options['defaultGamma']) && -1 == $options['defaultGamma']) $options['defaultGamma'] = intval(-1);
         $this->weightenPrio = null;
         $this->weightenCompression = null;
         $weighten = true;
@@ -218,6 +218,8 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
                 $this->weightenCompression = 0 < $this->weightenCompression && 100 > $this->weightenCompression ? $this->weightenCompression : null;
             }
             unset($options['weighten']);
+        } else {
+            $weighten = false;
         }
         if (isset($options['width'])) {
             $width = $options['width'];
@@ -316,7 +318,6 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             $width = intval($bias * $width);
             $height = intval($bias * $height);
         }
-
         return $options;
     }
 
