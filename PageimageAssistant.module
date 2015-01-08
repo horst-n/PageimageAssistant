@@ -23,6 +23,8 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
     static protected $sharpeningValues = array('none', 'soft', 'medium', 'strong');
 
+    const defaultRetinafyTemplate = '<img src="[URL]" width="[WIDTH]" height="[HEIGHT]" alt="[DESCRIPTION]" />';
+
 
     static public function isDebugMode() {
         return (true === wire('config')->debug && wire('user')->isLoggedin() && wire('user')->isSuperuser());
@@ -52,9 +54,13 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             'imageManipulatorOptions-thumbnailCoordsPermanent' => false,      // should the CroprectangleCoords for ThumbnailsModule be saved permanently
             );
 
-        if(isset($$which)) return $$which;
-        if('all'!=$which) return array();
-        return array_merge($imageSizerOptions, $imageManipulatorOptions);
+        $retinafy = array(
+            'retinafy-template' => self::defaultRetinafyTemplate
+            );
+
+        if (isset($$which)) return $$which;
+        if ('all' != $which) return array();
+        return array_merge($imageSizerOptions, $imageManipulatorOptions, $retinafy);
     }
 
 
@@ -71,7 +77,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $this->addHook('Pageimage::crop', $this, 'PiaMakeCrop');
         $this->addHook('Pageimage::cover', $this, 'PiaMakeCover');
         $this->addHook('Pageimage::contain', $this, 'PiaMakeContain');
-
+        $this->addHook('Pageimage::retinafy', $this, 'PiaCreateRetinafy');
 
         // synchronize quality-Inputfields (simple integer / slider)
         if(isset($this->data['imageSizerOptions-quality']) || isset($this->data['imageSizerOptions-qualitySlider']['min'])) {
@@ -119,6 +125,25 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         }
         # <<< imageManipulatorOptions
 
+    }
+
+
+    public function PiaCreateRetinafy($event) {
+        // get the default properties
+        $properties = array(
+            '[URL]' => $event->object->url,
+            '[WIDTH]' => intval($event->object->width / 2),
+            '[HEIGHT]' => intval($event->object->height / 2),
+            '[DESCRIPTION]' => $event->object->description
+        );
+        // check for custom property names
+        $customPropertyNames = is_array($event->arguments(0)) ? $event->arguments(0) : array();
+        foreach($customPropertyNames as $customProperty) {
+            $properties['[' . strtoupper($customProperty) . ']'] = $event->object->$customProperty;
+        }
+        $search = array_keys($properties);
+        $replace = array_values($properties);
+        $event->return = str_replace($search, $replace, $this->data['retinafy-template']);
     }
 
 
@@ -649,8 +674,26 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $form->add($fieldset);
         # <<< imageManipulatorOptions
 
-
         unset($notes);
+
+
+        # >>> retinafy
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'retinafyOptions';
+        $fieldset->attr('name', '_retinafyOptions');
+        $fieldset->description = __('here you can define the template that should be used with the "retinafy" property');
+
+            $field = $modules->get('InputfieldText');
+            $field->label = 'retinafy-template';
+            $field->attr('name', 'retinafy-template');
+            $field->attr('value', $data['retinafy-template']);
+            $field->description = __('default is: ' . self::defaultRetinafyTemplate);
+            $field->columnWidth = 100;
+            $fieldset->add($field);
+
+        $form->add($fieldset);
+        # <<< retinafy
+
 
         return $form;
     }
