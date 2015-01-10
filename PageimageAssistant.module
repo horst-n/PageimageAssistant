@@ -430,6 +430,9 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
     }
 
 
+
+
+
     static public function getModuleConfigInputfields(array $data) {
 
 //        if(version_compare(wire('config')->version, '2.4.15', '<')) {
@@ -682,6 +685,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $fieldset->label = 'retinafyOptions';
         $fieldset->attr('name', '_retinafyOptions');
         $fieldset->description = __('here you can define the template that should be used with the "retinafy" property');
+        $fieldset->collapsed = Inputfield::collapsedYes;
 
             $field = $modules->get('InputfieldText');
             $field->label = 'retinafy-template';
