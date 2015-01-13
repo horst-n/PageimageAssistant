@@ -78,6 +78,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $this->addHook('Pageimage::cover', $this, 'PiaMakeCover');
         $this->addHook('Pageimage::contain', $this, 'PiaMakeContain');
         $this->addHook('Pageimage::retinafy', $this, 'PiaCreateRetinafy');
+        $this->addHook('Pageimage::hiDPI', $this, 'PiaCreateRetinafy');
 
         // synchronize quality-Inputfields (simple integer / slider)
         if(isset($this->data['imageSizerOptions-quality']) || isset($this->data['imageSizerOptions-qualitySlider']['min'])) {
@@ -682,13 +683,13 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
         # >>> retinafy
         $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'retinafyOptions';
+        $fieldset->label = 'HiDPI / Retinafy Options';
         $fieldset->attr('name', '_retinafyOptions');
-        $fieldset->description = __('here you can define the template that should be used with the "retinafy" property');
+        $fieldset->description = __('here you can define the template that should be used with the "HiDPI" or "retinafy" method');
         $fieldset->collapsed = Inputfield::collapsedYes;
 
             $field = $modules->get('InputfieldText');
-            $field->label = 'retinafy-template';
+            $field->label = 'HiDPI / Retinafy Template';
             $field->attr('name', 'retinafy-template');
             $field->attr('value', $data['retinafy-template']);
             $field->description = __('default is: ' . self::defaultRetinafyTemplate);
