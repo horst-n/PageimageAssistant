@@ -89,7 +89,7 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
             } else {
                 $data['imageSizerOptions-qualitySlider']['min'] = $data['imageSizerOptions-quality'];
             }
-            wire('modules')->saveModuleConfigData(__CLASS__, $data);
+            self::writeModuleConfigData(__CLASS__, $data);
             unset($data);
         }
 
@@ -429,6 +429,28 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
         $img = $this->image;
         return ceil(($targetWidth / $img['width']) * $img['height']);
     }
+
+
+
+    /**
+    * with a version near 2.5.16, PW logs / can log modules API actions,
+    * this can lead very quick to thousands of logentries with Pia (or Croppableimages)
+    * so we suppress logs for our config data merging
+    */
+    private static function writeModuleConfigData($classname, &$data) {
+        $logs = wire('config')->logs;                              // get current log status
+        if (!is_array($logs) && !isset($logs['modules'])) {
+            wire('modules')->saveModuleConfigData($classname, $data);
+            return;
+        }
+        wire('config')->logs = array();                            // switch off logging for modules
+        wire('modules')->saveModuleConfigData($classname, $data);  // save config data
+        wire('config')->logs = $logs;                              // toggle on logging for modules
+    }
+
+
+
+
 
 
 
