@@ -3,7 +3,7 @@
 *
 *  Module PageimageAssistant - Pia
 *
-*  Version 0.3.0 beta
+*  Version 0.3.1 beta
 *
 *  This module assists in API usage of Pageimages
 *
@@ -160,6 +160,11 @@ class PageimageAssistant extends WireData implements Module, ConfigurableModule 
 
 
     public function PiaMakeCrop($event) {
+        // check if this event is intended to get worked out by Pia or by the pageimage::crop method
+        if (is_numeric($event->arguments(0))) {
+            $event->replace = false;
+            return;
+        }
         $width = $height = 0;
         $options = $this->getSizeParams($width, $height, $event->arguments(0), 'piacrop');
         if (!$this->upscaling && ($width > $event->object->width || $height > $event->object->height)) {
